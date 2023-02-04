@@ -1,4 +1,7 @@
-use std::fmt::{Display, Debug};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display},
+};
 
 use nom::{
     branch::alt,
@@ -8,6 +11,8 @@ use nom::{
     sequence::tuple,
     IResult,
 };
+
+use crate::identifier_parser::identifier;
 
 #[derive(PartialEq, Clone)]
 pub enum AstType {
@@ -33,11 +38,11 @@ pub struct PolyType {
 impl AstType {
     fn parse(input: &str) -> IResult<&str, AstType> {
         alt((
+            parse_func_type,
             parse_int_type,
             parse_float_type,
             parse_unit_type,
             parse_string_type,
-            parse_func_type,
             parse_unbound_poly_type,
         ))(input)
     }
@@ -55,32 +60,59 @@ impl AstType {
         }
     }
 
+    pub fn intersection(&self, other: &Self) -> Option<AstType> {
+        match (self, other) {
+            (AstType::Mono(a), AstType::Mono(b)) => a.intersection(b).map(AstType::Mono),
+            (AstType::Mono(a), AstType::Poly(b)) | (AstType::Poly(b), AstType::Mono(a)) => {
+                if b.bounds.is_empty() {
+                    Some(AstType::Mono(a.clone()))
+                } else {
+                    if b.bounds.contains(&AstType::Mono(a.clone())) {
+                        Some(AstType::Mono(a.clone()))
+                    } else {
+                        None
+                    }
+                }
+            }
+            (AstType::Poly(a), AstType::Poly(b)) => {
+                todo!("Get intersection of the two types trait bound lists and return that in a new type")
+            }
+        }
+    }
+
     pub fn with_poly_as(self, poly_name: String, as_type: AstType) -> Self {
         match self {
             AstType::Mono(MonoType::Function(p, body)) => {
-                match *p {
-                    AstType::Poly(poly_param) => {
-                        if poly_param.name == poly_name {
-                            AstType::Mono(MonoType::Function(Box::new(as_type), body))
-                        } else {
-                            AstType::Mono(MonoType::Function(Box::new(AstType::Poly(poly_param)), body))
-                        }
-                    },
-                    _ => AstType::Mono(MonoType::Function(p, Box::new(body.with_poly_as(poly_name, as_type))))
-                }
-            },
+                // match *p {
+                //     AstType::Poly(poly_param) => {
+                //         if poly_param.name == poly_name {
+                //             AstType::Mono(MonoType::Function(Box::new(as_type), body))
+                //         } else {
+                //             AstType::Mono(MonoType::Function(Box::new(AstType::Poly(poly_param)), body))
+                //         }
+                //     },
+                //     _ => AstType::Mono(MonoType::Function(p, Box::new(body.with_poly_as(poly_name, as_type))))
+                // }
+                AstType::Mono(MonoType::Function(
+                    Box::new(p.with_poly_as(poly_name.clone(), as_type.clone())),
+                    Box::new(body.with_poly_as(poly_name, as_type)),
+                ))
+            }
             AstType::Poly(p) => {
+                println!("{} ?= {}", p.name, poly_name);
                 if p.name == poly_name {
                     as_type
                 } else {
-                    AstType::Poly(PolyType { 
+                    AstType::Poly(PolyType {
                         name: p.name,
-                        bounds: p.bounds.into_iter().map(|x| {
-                            x.with_poly_as(poly_name.clone(), as_type.clone())
-                        }).collect()
+                        bounds: p
+                            .bounds
+                            .into_iter()
+                            .map(|x| x.with_poly_as(poly_name.clone(), as_type.clone()))
+                            .collect(),
                     })
                 }
-            },
+            }
             other => other,
         }
     }
@@ -91,8 +123,27 @@ impl MonoType {
         match (self, other) {
             (MonoType::Function(param1, body1), MonoType::Function(param2, body2)) => {
                 param1.intersects(param2) && body1.intersects(body2)
-            },
+            }
             (a, b) => a == b,
+        }
+    }
+
+    fn intersection(&self, other: &Self) -> Option<MonoType> {
+        match (self, other) {
+            (MonoType::Function(param1, body1), MonoType::Function(param2, body2)) => {
+                if param1.intersects(param2) && body1.intersects(body2) {
+                    Some(MonoType::Function(param1.clone(), body1.clone()))
+                } else {
+                    None
+                }
+            }
+            (a, b) => {
+                if a == b {
+                    Some(a.clone())
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -130,6 +181,20 @@ impl Display for AstType {
             }
         }
     }
+}
+
+pub fn parse_type_annotation(input: &str) -> IResult<&str, (String, AstType)> {
+    map(
+        tuple((
+            char('('),
+            identifier,
+            char(':'),
+            multispace0,
+            AstType::parse,
+            char(')'),
+        )),
+        |(_, ident, _, _, t, _)| (ident.to_owned(), t),
+    )(input)
 }
 
 pub fn parse_int_type(input: &str) -> IResult<&str, AstType> {

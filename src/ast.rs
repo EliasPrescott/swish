@@ -38,7 +38,11 @@ pub struct AstFunction {
 }
 
 impl AstFunction {
-    pub fn get_body_type(&self, known_functions: &HashMap<String, AstFunction>, params: &[AstNode]) -> AstType {
+    pub fn get_body_type(
+        &self,
+        known_functions: &HashMap<String, AstFunction>,
+        params: &[AstNode],
+    ) -> AstType {
         let base_type = match &self.body {
             AstFunctionBody::Ast(ast) => AstType::Mono(MonoType::Function(
                 Box::new(self.parameter_type.clone()),
@@ -50,30 +54,45 @@ impl AstFunction {
             )),
         };
 
-        println!("Params!: {:#?}", params);
-
-        let new_func_type = params
-            .iter()
-            .fold(base_type, |folding_type, next_param| {
-                match folding_type {
-                    AstType::Mono(MonoType::Function(param, body)) => {
-                        let param_type = next_param.get_type(known_functions);
-                        if param.intersects(&param_type) {
-                            match param_type {
-                                AstType::Poly(p) => {
-                                    body.with_poly_as(p.name, *param)
-                                },
-                                _ => *body
+        let new_func_type = params.iter().fold(base_type, |folding_type, next_param| {
+            match folding_type {
+                AstType::Mono(MonoType::Function(param, body)) => {
+                    let param_type = next_param.get_type(known_functions);
+                    match param.intersection(&param_type) {
+                        Some(new_intersection) => match (*param, param_type) {
+                            (AstType::Poly(a), AstType::Poly(b)) => body
+                                .with_poly_as(a.name, new_intersection.clone())
+                                .with_poly_as(b.name, new_intersection),
+                            (AstType::Poly(a), _) | (_, AstType::Poly(a)) => {
+                                body.with_poly_as(a.name, new_intersection)
                             }
-                        } else {
-                            panic!("function was expecting a {}, but got a {}", param, param_type);
-                        }
-                    },
-                    // I'll need to handle this, later :)
-                    AstType::Poly(_) => panic!("You got your poly in my function call!"),
-                    literal_mono => panic!("Cannot apply {} to {}", next_param.get_type(known_functions), literal_mono),
+                            _ => *body,
+                        },
+                        None => panic!(
+                            "function was expecting a {}, but got a {}",
+                            param, param_type
+                        ),
+                    }
+                    // if param.intersects(&param_type) {
+                    //     match param_type {
+                    //         AstType::Poly(p) => {
+                    //             body.with_poly_as(p.name, *param)
+                    //         },
+                    //         _ => *body
+                    //     }
+                    // } else {
+                    //     panic!("function was expecting a {}, but got a {}", param, param_type);
+                    // }
                 }
-            });
+                // I'll need to handle this, later :)
+                AstType::Poly(_) => panic!("You got your poly in my function call!"),
+                literal_mono => panic!(
+                    "Cannot apply {} to {}",
+                    next_param.get_type(known_functions),
+                    literal_mono
+                ),
+            }
+        });
 
         new_func_type
     }
@@ -144,7 +163,7 @@ impl AstNode {
                 } else {
                     t.clone()
                 }
-            },
+            }
             AstNode::Function(func) => func.get_body_type(known_functions, &vec![]),
         }
     }
@@ -166,7 +185,6 @@ fn parse_function(input: &str) -> ParseResult {
             .into_iter()
             .rev()
             .fold(body, |prev_body, next_param| {
-                println!("{}", next_param);
                 AstNode::Function(AstFunction {
                     parameter: next_param.to_owned(),
                     parameter_type: AstType::Poly(PolyType {

@@ -61,10 +61,9 @@ mod tests {
             func_type(addable.clone(), func_type(addable.clone(), addable.clone())),
         );
 
-        assert_type(
-            "(+ 5)",
-            func_type(int_type, int_type),
-        );
+        assert_type("(+ 5)", func_type(int_type, int_type));
+
+        assert_type("(+ \"prefix-\")", func_type(string_type, string_type));
     }
 
     #[test]
