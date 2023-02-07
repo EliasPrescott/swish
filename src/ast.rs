@@ -1,12 +1,12 @@
 use core::panic;
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
 use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{char, multispace0, multispace1, newline},
     combinator::{map, opt, recognize},
-    multi::{many0, many1},
+    multi::{many0, many1, many_till},
     sequence::{delimited, tuple},
     IResult,
 };
@@ -18,7 +18,7 @@ use crate::{
     string_parser::parse_string_raw,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum AstNode {
     Integer(i64),
     Float(f64),
@@ -30,7 +30,7 @@ pub enum AstNode {
     Unit,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct AstFunction {
     pub parameter: String,
     pub parameter_type: AstType,
@@ -44,10 +44,13 @@ impl AstFunction {
         params: &[AstNode],
     ) -> AstType {
         let base_type = match &self.body {
-            AstFunctionBody::Ast(ast) => AstType::Mono(MonoType::Function(
-                Box::new(self.parameter_type.clone()),
-                Box::new(ast.get_type(known_functions)),
-            )),
+            AstFunctionBody::Ast(ast) => {
+                let ast = ast.clone();
+                AstType::Mono(MonoType::Function(
+                    Box::new(self.parameter_type.clone()),
+                    Box::new(ast.replace_identifier_type(&self.parameter, self.parameter_type.clone()).0.get_type(known_functions)),
+                ))
+            },
             AstFunctionBody::Builtin(_, return_type) => AstType::Mono(MonoType::Function(
                 Box::new(self.parameter_type.clone()),
                 Box::new(return_type.clone()),
@@ -98,9 +101,10 @@ impl AstFunction {
     }
 }
 
+#[derive(Clone)]
 pub enum AstFunctionBody {
     Ast(Box<AstNode>),
-    Builtin(Box<dyn Fn(Vec<AstNode>) -> AstNode>, AstType),
+    Builtin(Rc<dyn Fn(Vec<AstNode>) -> AstNode>, AstType),
 }
 
 impl Debug for AstFunctionBody {
@@ -135,7 +139,68 @@ impl AstNode {
             parse_int,
             parse_string,
             parse_identifier,
+            parse_typed_identifier,
         ))(input)
+    }
+
+    pub fn get_first_identifier_usage(&self, identifier: &str) -> Option<&Self> {
+        match self {
+            AstNode::Identifier(ident, _) => {
+                if ident == identifier {
+                    Some(self)
+                } else {
+                    None
+                }
+            },
+            AstNode::Function(func) => {
+                match &func.body {
+                    AstFunctionBody::Ast(body) => body.get_first_identifier_usage(identifier),
+                    AstFunctionBody::Builtin(_, _) => None,
+                }
+            },
+            AstNode::FunctionCall(items) => {
+                items.iter().find_map(|x| x.get_first_identifier_usage(identifier))
+            },
+            other => None,
+        }
+    }
+
+    pub fn replace_identifier_type(self, identifier: &str, new_type: AstType) -> (Self, Option<AstType>) {
+        match self {
+            AstNode::Identifier(ident, t) => (AstNode::Identifier(
+                ident.clone(),
+                if identifier == ident { new_type } else { t.clone() },
+            ), Some(t)),
+            AstNode::Function(func) => {
+                let (new_func_body, bubble_type) = match func.body {
+                    AstFunctionBody::Ast(b) => {
+                        let (bod, bub) = b.replace_identifier_type(identifier, new_type);
+                        (AstFunctionBody::Ast(Box::new(
+                            bod,
+                        )), bub)
+                    },
+                    AstFunctionBody::Builtin(b, t) => (AstFunctionBody::Builtin(b, t), None),
+                };
+
+                (AstNode::Function(AstFunction {
+                    parameter: func.parameter,
+                    parameter_type: func.parameter_type,
+                    body: new_func_body,
+                }), bubble_type)
+            }
+            AstNode::FunctionCall(items) => {
+                let mapped_items: Vec<_> = items
+                    .into_iter()
+                    .map(|x| x.replace_identifier_type(identifier, new_type.clone()))
+                    .collect();
+                let first_bubble_type = mapped_items
+                    .iter()
+                    .find(|(_, y)| y.is_some())
+                    .and_then(|x| x.1.clone());
+                (AstNode::FunctionCall(mapped_items.into_iter().map(|(x, _)| x).collect()), first_bubble_type)
+            },
+            other => (other, None),
+        }
     }
 
     pub fn get_type(&self, known_functions: &HashMap<String, AstFunction>) -> AstType {
@@ -172,9 +237,19 @@ impl AstNode {
 fn parse_function(input: &str) -> ParseResult {
     let (rem, _) = char('(')(input)?;
     let (rem, _) = char('\\')(rem)?;
-    let (rem, params) = many1(delimited(multispace0, identifier, multispace0))(rem)?;
-    let (rem, _) = multispace0(rem)?;
-    let (rem, _) = tag("|>")(rem)?;
+    let (rem, (params, _)) = many_till(
+        delimited(
+            multispace0,
+            alt((
+                map(parse_typed_identifier_raw, |(s, t)| (s, Some(t))),
+                map(identifier, |s| (s.to_owned(), None)),
+            )),
+            multispace0,
+        ),
+        tag("->"),
+    )(rem)?;
+    // let (rem, _) = multispace0(rem)?;
+    // let (rem, _) = tag("->")(rem)?;
     let (rem, _) = multispace0(rem)?;
     let (rem, body) = AstNode::parse(rem)?;
     let (rem, _) = char(')')(rem)?;
@@ -184,13 +259,16 @@ fn parse_function(input: &str) -> ParseResult {
         params
             .into_iter()
             .rev()
-            .fold(body, |prev_body, next_param| {
+            .fold(body, |prev_body, (next_ident, next_ident_type)| {
                 AstNode::Function(AstFunction {
-                    parameter: next_param.to_owned(),
-                    parameter_type: AstType::Poly(PolyType {
-                        name: "a".to_owned(),
-                        bounds: vec![],
-                    }),
+                    parameter: next_ident.to_owned(),
+                    parameter_type: match next_ident_type {
+                        Some(t) => t,
+                        None => AstType::Poly(PolyType {
+                            name: "a".to_owned(),
+                            bounds: vec![],
+                        }),
+                    },
                     body: AstFunctionBody::Ast(Box::new(prev_body)),
                 })
             }),
@@ -231,6 +309,27 @@ fn parse_identifier(input: &str) -> ParseResult {
             }),
         )
     })(input)
+}
+
+fn parse_typed_identifier(input: &str) -> ParseResult {
+    map(parse_typed_identifier_raw, |(ident, t)| {
+        AstNode::Identifier(ident.to_owned(), t)
+    })(input)
+}
+
+fn parse_typed_identifier_raw(input: &str) -> IResult<&str, (String, AstType)> {
+    map(
+        tuple((
+            char('('),
+            identifier,
+            multispace0,
+            char(':'),
+            multispace0,
+            AstType::parse,
+            char(')'),
+        )),
+        |(_, ident, _, _, _, t, _)| (ident.to_owned(), t),
+    )(input)
 }
 
 fn parse_unit(input: &str) -> ParseResult {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{
     ast::{AstFunction, AstFunctionBody, AstNode},
@@ -29,7 +29,7 @@ pub fn std_functions() -> HashMap<String, AstFunction> {
                     ],
                 }),
                 body: AstFunctionBody::Builtin(
-                    Box::new(|params| match &params[..] {
+                    Rc::new(|params| match &params[..] {
                         [AstNode::Integer(x), AstNode::Integer(y)] => AstNode::Integer(x + y),
                         [AstNode::Float(x), AstNode::Float(y)] => AstNode::Float(x + y),
                         [AstNode::String(x), AstNode::String(y)] => {

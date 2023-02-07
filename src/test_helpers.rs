@@ -40,6 +40,11 @@ pub fn assert_type(input: &str, t: AstType) {
     assert_eq!(result.get_type(&std_functions::std_functions()), t);
 }
 
+pub fn parse_type(input: &str, t: AstType) {
+    let (_, result) = AstType::parse(input).unwrap();
+    assert_eq!(result, t);
+}
+
 pub fn poly_type(name: &str) -> AstType {
     AstType::Poly(PolyType {
         name: name.to_owned(),

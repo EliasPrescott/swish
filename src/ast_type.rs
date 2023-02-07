@@ -36,10 +36,10 @@ pub struct PolyType {
 }
 
 impl AstType {
-    fn parse(input: &str) -> IResult<&str, AstType> {
+    pub fn parse(input: &str) -> IResult<&str, AstType> {
         alt((
-            parse_func_type,
             parse_int_type,
+            parse_func_type,
             parse_float_type,
             parse_unit_type,
             parse_string_type,
@@ -75,7 +75,27 @@ impl AstType {
                 }
             }
             (AstType::Poly(a), AstType::Poly(b)) => {
-                todo!("Get intersection of the two types trait bound lists and return that in a new type")
+                if a.bounds.is_empty() {
+                    Some(AstType::Poly(b.clone()))
+                } else if b.bounds.is_empty() {
+                    Some(AstType::Poly(a.clone()))
+                }
+                else {
+                    let mut intersections = vec![];
+                    for bound in &a.bounds[..] {
+                        if b.bounds.contains(&bound) {
+                            intersections.push(bound.clone());
+                        }
+                    }
+                    if intersections.is_empty() {
+                        None
+                    } else {
+                        Some(AstType::Poly(PolyType {
+                            name: a.name.clone(),
+                            bounds: intersections,
+                        }))
+                    }
+                }
             }
         }
     }
@@ -99,7 +119,6 @@ impl AstType {
                 ))
             }
             AstType::Poly(p) => {
-                println!("{} ?= {}", p.name, poly_name);
                 if p.name == poly_name {
                     as_type
                 } else {
@@ -183,20 +202,6 @@ impl Display for AstType {
     }
 }
 
-pub fn parse_type_annotation(input: &str) -> IResult<&str, (String, AstType)> {
-    map(
-        tuple((
-            char('('),
-            identifier,
-            char(':'),
-            multispace0,
-            AstType::parse,
-            char(')'),
-        )),
-        |(_, ident, _, _, t, _)| (ident.to_owned(), t),
-    )(input)
-}
-
 pub fn parse_int_type(input: &str) -> IResult<&str, AstType> {
     map(tag("int"), |_| AstType::Mono(MonoType::Integer))(input)
 }
@@ -228,12 +233,16 @@ pub fn parse_unbound_poly_type(input: &str) -> IResult<&str, AstType> {
 pub fn parse_func_type(input: &str) -> IResult<&str, AstType> {
     map(
         tuple((
+            char('('),
             AstType::parse,
             multispace0,
             tag("->"),
             multispace0,
             AstType::parse,
+            char(')'),
         )),
-        |(param, _, _, _, out)| AstType::Mono(MonoType::Function(Box::new(param), Box::new(out))),
+        |(_, param, _, _, _, out, _)| {
+            AstType::Mono(MonoType::Function(Box::new(param), Box::new(out)))
+        },
     )(input)
 }
