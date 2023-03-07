@@ -4,9 +4,9 @@ use std::{collections::HashMap, fmt::Debug, rc::Rc};
 use nom::{
     branch::alt,
     bytes::complete::tag,
-    character::complete::{char, multispace0, multispace1, newline},
+    character::complete::{char, multispace0, multispace1},
     combinator::{map, opt, recognize},
-    multi::{many0, many1, many_till},
+    multi::{many1, many_till},
     sequence::{delimited, tuple},
     IResult,
 };

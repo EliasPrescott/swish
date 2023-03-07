@@ -22,7 +22,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ast::AstNode, test_helpers::*};
+    use crate::test_helpers::*;
 
     #[test]
     fn parse_float() {
